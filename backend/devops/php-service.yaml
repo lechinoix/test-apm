@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: php
+  labels:
+    app: seed-php
+spec:
+  type: ClusterIP
+  ports:
+    - port: 9000
+  selector:
+    app: seed-php

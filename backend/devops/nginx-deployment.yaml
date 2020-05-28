@@ -1,0 +1,23 @@
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  name: seed-nginx
+  labels:
+    app: seed-nginx
+spec:
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: seed-nginx
+    spec:
+      containers:
+        - name: api-nginx
+          image: "gcr.io/eto-mona-lisa/nginx:1.0.0"
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 80
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80

@@ -1,0 +1,9 @@
+parameters:
+    level: max
+    autoload_files:
+        - vendor/autoload.php
+        - bin/.phpunit/phpunit-8.3-0/vendor/autoload.php
+    excludes_analyse:
+        - %currentWorkingDirectory%/src/Migrations/*
+    symfony:
+        container_xml_path: '%rootDir%/../../../var/cache/dev/App_KernelDevDebugContainer.xml'

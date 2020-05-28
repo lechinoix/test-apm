@@ -1,0 +1,413 @@
+version: 2.1
+
+orbs:
+  skip: theodo/skip@0.0.4
+
+executors:
+  defaults_typescript:
+    docker:
+      - image: circleci/node:12.9
+  defaults_api-platform:
+    docker:
+      - image: chialab/php:7.4
+        environment:
+          - DATABASE_URL=postgres://seed:Ge0rgesMoustaki@localhost/seed
+      - image: circleci/postgres:9.6-alpine-ram
+        environment:
+          - POSTGRES_DB=seed
+          - POSTGRES_USER=seed
+          - POSTGRES_PASSWORD=Ge0rgesMoustaki
+
+commands:
+  yarn-install:
+    parameters:
+      workspace:
+        type: string
+    steps:
+      - checkout
+      - skip/skip_unchanged:
+          paths: << parameters.workspace >>
+      - attach_workspace:
+          at: ~/testapm/<< parameters.workspace >>
+      - restore_cache:
+          key: node-modules-cache-{{ checksum "<< parameters.workspace >>/yarn.lock" }}
+      - run:
+          working_directory: << parameters.workspace >>
+          name: Install front dependencies
+          command: yarn
+      - save_cache:
+          key: node-modules-cache-{{ checksum "<< parameters.workspace >>/yarn.lock" }}
+          paths:
+            - << parameters.workspace >>/node_modules
+      - persist_to_workspace:
+          root: ~/testapm/<< parameters.workspace >>
+          paths:
+            - node_modules
+            - .env
+
+  yarn-tests:
+    parameters:
+      workspace:
+        type: string
+    steps:
+      - checkout
+      - skip/skip_unchanged:
+          paths: << parameters.workspace >>
+      - attach_workspace:
+          at: ~/testapm/<< parameters.workspace >>
+      - run:
+          working_directory: << parameters.workspace >>
+          name: Unit test with coverage
+          command: yarn test:coverage
+      - store_artifacts:
+          path: << parameters.workspace >>/coverage
+      - run:
+          working_directory: << parameters.workspace >>
+          name: Run Typescript checker
+          command: yarn tsc
+
+  yarn-linter:
+    parameters:
+      workspace:
+        type: string
+    steps:
+      - checkout
+      - skip/skip_unchanged:
+          paths: << parameters.workspace >>
+      - attach_workspace:
+          at: ~/testapm/<< parameters.workspace >>
+      - run:
+          working_directory: << parameters.workspace >>
+          name: Run linter
+          command: yarn lint
+      - store_artifacts:
+          path: << parameters.workspace >>/coverage
+
+  yarn-audit:
+    parameters:
+      workspace:
+        type: string
+    steps:
+      - checkout
+      # yarn-audit is started with a cron.
+      # As such we cannot get the frontend dependencies from the workspace like we do with the other jobs. We need to re-install them.
+      - run:
+          working_directory: << parameters.workspace >>
+          name: Install front dependencies
+          command: yarn
+      - run:
+          working_directory: << parameters.workspace >>
+          name: Check dependencies
+          command: yarn audit-dependencies
+
+jobs:
+  composer-install:
+    executor: defaults_api-platform
+    working_directory: ~/testapm
+    steps:
+      - checkout
+      - skip/skip_unchanged:
+          paths: backend
+      - attach_workspace:
+          at: ~/testapm/backend
+      - restore_cache:
+          key: composer-cache-{{ checksum "backend/composer.lock" }}
+      - run:
+          working_directory: backend
+          name: Install composer dependencies
+          command: composer install -n --prefer-dist
+      - save_cache:
+          key: composer-cache-{{ checksum "backend/composer.lock" }}
+          paths:
+            - backend/vendor
+      - persist_to_workspace:
+          root: ~/testapm/backend
+          paths:
+            - vendor
+            - .env
+
+  api-platform-static-analysis-php-code-standard:
+    executor: defaults_api-platform
+    working_directory: ~/testapm
+    steps:
+      - checkout
+      - skip/skip_unchanged:
+          paths: backend
+      - attach_workspace:
+          at: ~/testapm/backend
+      - restore_cache:
+          key: composer-cache-{{ checksum "backend/composer.lock" }}
+      - run:
+          working_directory: backend
+          name: Static analysis - Run PHP Code Standard analysis
+          command: ./vendor/bin/php-cs-fixer fix --config=./.php_cs.dist --dry-run -v
+
+  api-platform-static-analysis-php-stan:
+    executor: defaults_api-platform
+    working_directory: ~/testapm
+    steps:
+      - checkout
+      - skip/skip_unchanged:
+          paths: backend
+      - attach_workspace:
+          at: ~/testapm/backend
+      - restore_cache:
+          key: composer-cache-{{ checksum "backend/composer.lock" }}
+      - run:
+          working_directory: backend
+          name: Static analysis - Install PHP Unit and generate autoload.php used by PHPStan
+          command: ./bin/phpunit install
+      - run:
+          working_directory: backend
+          name: Static analysis - Run PHPStan analysis
+          command: ./vendor/bin/phpstan analyse src
+
+  api-platform-static-analysis-php-insights:
+    executor: defaults_api-platform
+    working_directory: ~/testapm
+    steps:
+      - checkout
+      - skip/skip_unchanged:
+          paths: backend
+      - attach_workspace:
+          at: ~/testapm/backend
+      - restore_cache:
+          key: composer-cache-{{ checksum "backend/composer.lock" }}
+      - run:
+          working_directory: backend
+          name: Static analysis - Run PHPInsights analysis
+          command: ./vendor/bin/phpinsights --no-interaction --min-quality=80 --min-complexity=80 --min-architecture=85 --min-style=95
+
+  api-platform-functional-tests:
+    executor: defaults_api-platform
+    working_directory: ~/testapm
+    steps:
+      - checkout
+      - skip/skip_unchanged:
+          paths: backend
+      - attach_workspace:
+          at: ~/testapm/backend
+      - restore_cache:
+          key: composer-cache-{{ checksum "backend/composer.lock" }}
+      - restore_cache:
+          key: phpunit-cache-{{ checksum "backend/composer.lock" }}
+      - run:
+          working_directory: backend
+          name: Run migrations
+          command: bin/console do:mi:mi --no-interaction --env=test
+      - run:
+          working_directory: backend
+          name: Functionnal analysis - Run PHPUnit tests
+          command: bin/phpunit --configuration phpunit.xml.dist --testsuite Functional tests
+      - save_cache:
+          key: phpunit-cache-{{ checksum "backend/composer.lock" }}
+          paths:
+            - backend/bin/.phpunit
+      - persist_to_workspace:
+          root: ~/testapm/backend
+          paths:
+            - bin/.phpunit
+
+  yarn-install-front:
+    executor: defaults_typescript
+    working_directory: ~/testapm
+    steps:
+      - yarn-install:
+          workspace: frontend
+
+  react-tests:
+    executor: defaults_typescript
+    working_directory: ~/testapm
+    environment:
+      NODE_ENV: test
+    steps:
+      - yarn-tests:
+          workspace: frontend
+
+  react-bundlesize:
+    executor: defaults_typescript
+    working_directory: ~/testapm
+    environment:
+      NODE_ENV: prod
+    steps:
+      - checkout
+      - skip/skip_unchanged:
+          paths: frontend
+      - attach_workspace:
+          at: ~/testapm/frontend
+      - run:
+          working_directory: frontend
+          name: Check bundle size
+          command: yarn build && ./node_modules/.bin/bundlesize
+      - store_artifacts:
+          path: frontend/coverage
+
+  react-linter:
+    executor: defaults_typescript
+    working_directory: ~/testapm
+    environment:
+      NODE_ENV: prod
+    steps:
+      - checkout
+      - skip/skip_unchanged:
+          paths: frontend
+      - yarn-linter:
+          workspace: frontend
+      - run:
+          working_directory: frontend
+          name: Run css linter
+          command: yarn lint-style
+      - store_artifacts:
+          path: frontend/coverage
+
+  react-audit:
+    executor: defaults_typescript
+    working_directory: ~/testapm
+    environment:
+      NODE_ENV: prod
+    steps:
+      - yarn-audit:
+          workspace: frontend
+  e2e-tests:
+    machine:
+      image: ubuntu-1604:201903-01
+    environment:
+      - TERM: xterm
+    working_directory: ~/testapm
+    steps:
+      - checkout
+      - restore_cache:
+          name: Restore node modules cache
+          key: node-modules-e2e-cache-{{ checksum "frontend/yarn.lock" }}
+      - restore_cache:
+          name: Restore Docker cache
+          key: >
+            docker-e2e-cache-
+            {{ checksum "docker-compose.yml" }}
+            {{ checksum "backend/docker/nginx/conf.d/default.conf" }}
+            {{ checksum "backend/docker/php/php.ini" }}
+            {{ checksum "backend/docker/varnish/conf/default.vcl" }}
+      - run:
+          name: Load stored Docker images
+          command: |
+            if [ -d docker_images ]; then
+              docker load < docker_images/varnish.tar
+              docker load < docker_images/nginx.tar
+              docker load < docker_images/php.tar
+              docker load < docker_images/psql.tar
+            fi
+      - run:
+          name: Install Docker Compose
+          command: |
+            curl -L https://github.com/docker/compose/releases/download/1.23.2/docker-compose-`uname -s`-`uname -m` > ~/docker-compose
+            chmod +x ~/docker-compose
+            mv ~/docker-compose /usr/local/bin/docker-compose
+      - run:
+          working_directory: backend
+          name: Copy test JWT keys
+          command: |
+            cp tests/jwt/* config/jwt
+      - run:
+          name: Start backend
+          command: docker-compose up -d
+          environment:
+            CONTAINER_REGISTRY_BASE: quay.io/api-platform
+      - run:
+          name: Install yarn
+          command: |
+            curl -sS https://dl.yarnpkg.com/debian/pubkey.gpg | sudo apt-key add -
+            echo "deb https://dl.yarnpkg.com/debian/ stable main" | sudo tee /etc/apt/sources.list.d/yarn.list
+            sudo apt-get update && sudo apt-get install yarn
+      - run:
+          name: Switch to node 10.8 and set as default for all other steps
+          command: |
+            export NVM_DIR="/opt/circleci/.nvm"
+            [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+            nvm use 10.8
+            nvm alias default 10.8
+      - run:
+          working_directory: frontend
+          name: Setup Dependencies
+          command: |
+            export NVM_DIR="/opt/circleci/.nvm"
+            [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+            yarn install
+      - run:
+          working_directory: backend
+          name: Run migrations
+          command: docker-compose exec php bin/console do:mi:mi --no-interaction --env=test
+      - run:
+          name: Load fixtures
+          command: docker-compose exec php bin/console hautelook:fixtures:load -n --env=test
+      - run:
+          working_directory: frontend
+          name: Run e2e tests
+          command: |
+            export NVM_DIR="/opt/circleci/.nvm"
+            [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+            yarn start &
+            $(npm bin)/wait-on http://localhost:3000
+            $(npm bin)/cypress run
+      - store_artifacts:
+          path: frontend/cypress/videos
+      - save_cache:
+          name: Save node modules cache
+          key: node-modules-e2e-cache-{{ checksum "frontend/yarn.lock" }}
+          paths:
+            - frontend/node_modules
+            - ~/.npm
+            - ~/.cache
+      - run:
+          name: Save Docker images
+          command: |
+            mkdir -p docker_images
+            source .env
+            docker save ${CONTAINER_REGISTRY_BASE}/varnish > docker_images/varnish.tar
+            docker save ${CONTAINER_REGISTRY_BASE}/nginx > docker_images/nginx.tar
+            docker save ${CONTAINER_REGISTRY_BASE}/php > docker_images/php.tar
+            docker save postgres:10.6-alpine > docker_images/psql.tar
+      - save_cache:
+          name: Save Docker cache
+          key: docker-e2e-cache-{{ checksum "docker-compose.yml" }}
+          paths:
+            - docker_images
+
+workflows:
+  version: 2
+  stack:
+    jobs:
+      - composer-install
+      - api-platform-static-analysis-php-code-standard:
+          requires:
+            - composer-install
+      - api-platform-static-analysis-php-stan:
+          requires:
+            - composer-install
+      - api-platform-static-analysis-php-insights:
+          requires:
+            - composer-install
+      - api-platform-functional-tests:
+          requires:
+            - composer-install
+      - yarn-install-front
+      - react-tests:
+          requires:
+            - yarn-install-front
+      - react-bundlesize:
+          requires:
+            - yarn-install-front
+      - react-linter:
+          requires:
+            - yarn-install-front
+      - e2e-tests
+  audit-dependencies:
+    triggers:
+      - schedule:
+          # jobs start at 00h00 every Monday, test made for master
+          cron: "0 0 * * 1"
+          filters:
+            branches:
+              only:
+                - master
+    jobs:
+      - react-audit

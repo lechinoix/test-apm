@@ -1,0 +1,86 @@
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  name: seed-php
+  labels:
+    app: seed-php
+spec:
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: seed-php
+    spec:
+      containers:
+        - name: api-php
+          image: "gcr.io/eto-mona-lisa/php:1.0.7" # NB: The 1.0.7 image have any security check on the API
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 9000
+          env:
+            - name: APP_ENV
+              valueFrom:
+                configMapKeyRef:
+                  name: seed
+                  key: env
+            - name: APP_DEBUG
+              valueFrom:
+                configMapKeyRef:
+                  name: seed
+                  key: debug
+            - name: CORS_ALLOW_ORIGIN
+              valueFrom:
+                configMapKeyRef:
+                  name: seed
+                  key: cors-allow-origin
+            - name: SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: seed
+                  key: secret
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: seed
+                  key: database-url
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: cloudsql-db-credentials
+                  key: username
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: cloudsql-db-credentials
+                  key: password
+            - name: JWT_SECRET_KEY
+              valueFrom:
+                configMapKeyRef:
+                  name: eto
+                  key: JWT_SECRET_KEY
+            - name: JWT_PUBLIC_KEY
+              valueFrom:
+                configMapKeyRef:
+                  name: eto
+                  key: JWT_PUBLIC_KEY
+            - name: JWT_PASSPHRASE
+              valueFrom:
+                configMapKeyRef:
+                  name: eto
+                  key: JWT_PASSPHRASE
+        - name: cloudsql-proxy
+          image: gcr.io/cloudsql-docker/gce-proxy:1.11
+          command: ["/cloud_sql_proxy",
+                    "-instances=eto-mona-lisa:us-central1:database-eto=tcp:3306",
+                    "-credential_file=/secrets/cloudsql/credentials.json"]
+          securityContext:
+            runAsUser: 2  # non-root user
+            allowPrivilegeEscalation: false
+          volumeMounts:
+            - name: cloudsql-instance-credentials
+              mountPath: /secrets/cloudsql
+              readOnly: true
+      volumes:
+        - name: cloudsql-instance-credentials
+          secret:
+            secretName: cloudsql-instance-credentials
